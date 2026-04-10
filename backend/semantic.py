@@ -1,4 +1,5 @@
 """
+semantic.py:
 Mini-C Compiler Semantic Analyzer
 Performs semantic analysis on the AST
 - Symbol table management

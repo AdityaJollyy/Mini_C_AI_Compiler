@@ -1,9 +1,8 @@
 """
+lexer.py:
 Mini-C Compiler Lexer
-Tokenizes a subset of C language using PLY (Python Lex-Yacc)
+Tokenizes a subset of C language without external lexer libraries
 """
-
-import ply.lex as lex
 
 # List of token names
 tokens = (
@@ -48,100 +47,200 @@ reserved = {
     'printf': 'PRINTF',
 }
 
-# Simple token rules (single characters)
-t_PLUS = r'\+'
-t_MINUS = r'-'
-t_TIMES = r'\*'
-t_DIVIDE = r'/'
-t_ASSIGN = r'='
-t_LPAREN = r'\('
-t_RPAREN = r'\)'
-t_LBRACE = r'\{'
-t_RBRACE = r'\}'
-t_SEMI = r';'
-t_COMMA = r','
-
-# Comparison operators (order matters - longer patterns first)
-t_LE = r'<='
-t_GE = r'>='
-t_EQ = r'=='
-t_NE = r'!='
-t_LT = r'<'
-t_GT = r'>'
-
 # Ignored characters (spaces and tabs)
-t_ignore = ' \t'
+t_ignore = ' \t\r'
 
 
-def t_STRING(t):
-    r'"([^"\\]|\\.)*"'
-    # Keep the quotes for easier parsing
-    t.value = t.value
-    return t
+class Token:
+    """Simple token object."""
+
+    def __init__(self, token_type, value, lineno, lexpos):
+        self.type = token_type
+        self.value = value
+        self.lineno = lineno
+        self.lexpos = lexpos
 
 
-def t_ID(t):
-    r'[a-zA-Z_][a-zA-Z_0-9]*'
-    # Check for reserved words
-    t.type = reserved.get(t.value, 'ID')
-    return t
+class MiniCLexerEngine:
+    """Lexer engine with input/token API."""
 
+    def __init__(self):
+        self.data = ""
+        self.pos = 0
+        self.length = 0
+        self.lineno = 1
+        self.errors = []
 
-def t_NUMBER(t):
-    r'\d+'
-    t.value = int(t.value)
-    return t
+    def input(self, code):
+        self.data = code or ""
+        self.pos = 0
+        self.length = len(self.data)
+        self.lineno = 1
+        self.errors = []
 
+    def _peek(self, offset=0):
+        idx = self.pos + offset
+        if idx >= self.length:
+            return ""
+        return self.data[idx]
 
-def t_newline(t):
-    r'\n+'
-    t.lexer.lineno += len(t.value)
+    def _advance(self, count=1):
+        for _ in range(count):
+            if self.pos >= self.length:
+                return
+            if self.data[self.pos] == '\n':
+                self.lineno += 1
+            self.pos += 1
 
+    def _add_error(self, message):
+        self.errors.append({
+            'line': self.lineno,
+            'type': 'Lexical',
+            'message': message
+        })
 
-def t_COMMENT(t):
-    r'//.*'
-    pass  # Ignore single-line comments
+    def token(self):
+        while self.pos < self.length:
+            ch = self._peek()
 
+            # Skip whitespace
+            if ch in t_ignore:
+                self._advance()
+                continue
 
-def t_BLOCK_COMMENT(t):
-    r'/\*[\s\S]*?\*/'
-    t.lexer.lineno += t.value.count('\n')
-    pass  # Ignore block comments
+            # Newlines
+            if ch == '\n':
+                self._advance()
+                continue
 
+            # Comments
+            if ch == '/' and self._peek(1) == '/':
+                self._advance(2)
+                while self.pos < self.length and self._peek() != '\n':
+                    self._advance()
+                continue
 
-def t_error(t):
-    """Error handling rule"""
-    char = t.value[0]
-    
-    # Provide more helpful error messages
-    if char == '"':
-        message = "Unterminated string literal"
-    elif char == "'":
-        message = "Single quotes not supported. Use double quotes for strings"
-    elif char in '[]':
-        message = f"Arrays are not supported in Mini-C (found '{char}')"
-    elif char == '&':
-        message = "Pointers/address-of operator not supported in Mini-C"
-    elif char == '#':
-        message = "Preprocessor directives not supported in Mini-C"
-    else:
-        message = f"Illegal character '{char}'"
-    
-    error = {
-        'line': t.lexer.lineno,
-        'type': 'Lexical',
-        'message': message
-    }
-    t.lexer.errors.append(error)
-    t.lexer.skip(1)
+            if ch == '/' and self._peek(1) == '*':
+                self._advance(2)
+                while self.pos < self.length:
+                    if self._peek() == '*' and self._peek(1) == '/':
+                        self._advance(2)
+                        break
+                    self._advance()
+                else:
+                    self._add_error("Unterminated block comment")
+                continue
+
+            start_pos = self.pos
+            line = self.lineno
+
+            # Two-character operators
+            two = ch + self._peek(1)
+            if two in {'<=', '>=', '==', '!='}:
+                token_type = {
+                    '<=': 'LE',
+                    '>=': 'GE',
+                    '==': 'EQ',
+                    '!=': 'NE',
+                }[two]
+                self._advance(2)
+                return Token(token_type, two, line, start_pos)
+
+            # Single-character tokens
+            single_char_tokens = {
+                '+': 'PLUS',
+                '-': 'MINUS',
+                '*': 'TIMES',
+                '/': 'DIVIDE',
+                '=': 'ASSIGN',
+                '<': 'LT',
+                '>': 'GT',
+                '(': 'LPAREN',
+                ')': 'RPAREN',
+                '{': 'LBRACE',
+                '}': 'RBRACE',
+                ';': 'SEMI',
+                ',': 'COMMA',
+            }
+            if ch in single_char_tokens:
+                self._advance()
+                return Token(single_char_tokens[ch], ch, line, start_pos)
+
+            # String literal
+            if ch == '"':
+                value_chars = ['"']
+                self._advance()
+                escaped = False
+
+                while self.pos < self.length:
+                    curr = self._peek()
+
+                    if curr == '\n' and not escaped:
+                        self._add_error("Unterminated string literal")
+                        return None
+
+                    value_chars.append(curr)
+                    self._advance()
+
+                    if escaped:
+                        escaped = False
+                        continue
+
+                    if curr == '\\':
+                        escaped = True
+                        continue
+
+                    if curr == '"':
+                        value = ''.join(value_chars)
+                        return Token('STRING', value, line, start_pos)
+
+                self._add_error("Unterminated string literal")
+                return None
+
+            # Identifier / reserved word
+            if ch.isalpha() or ch == '_':
+                ident = []
+                while self.pos < self.length:
+                    curr = self._peek()
+                    if curr.isalnum() or curr == '_':
+                        ident.append(curr)
+                        self._advance()
+                    else:
+                        break
+                value = ''.join(ident)
+                token_type = reserved.get(value, 'ID')
+                return Token(token_type, value, line, start_pos)
+
+            # Number literal
+            if ch.isdigit():
+                digits = []
+                while self.pos < self.length and self._peek().isdigit():
+                    digits.append(self._peek())
+                    self._advance()
+                return Token('NUMBER', int(''.join(digits)), line, start_pos)
+
+            # Error handling
+            if ch == "'":
+                message = "Single quotes not supported. Use double quotes for strings"
+            elif ch in '[]':
+                message = f"Arrays are not supported in Mini-C (found '{ch}')"
+            elif ch == '&':
+                message = "Pointers/address-of operator not supported in Mini-C"
+            elif ch == '#':
+                message = "Preprocessor directives not supported in Mini-C"
+            else:
+                message = f"Illegal character '{ch}'"
+
+            self._add_error(message)
+            self._advance()
+
+        return None
 
 
 class Lexer:
-    """Wrapper class for the PLY lexer"""
     
     def __init__(self):
-        self.lexer = lex.lex()
-        self.lexer.errors = []
+        self.lexer = MiniCLexerEngine()
     
     def tokenize(self, code):
         """
@@ -153,8 +252,6 @@ class Lexer:
         Returns:
             tuple: (list of tokens, list of errors)
         """
-        self.lexer.errors = []
-        self.lexer.lineno = 1
         self.lexer.input(code)
         
         tokens_list = []
@@ -171,9 +268,7 @@ class Lexer:
         return tokens_list, self.lexer.errors
     
     def get_lexer(self):
-        """Return the raw PLY lexer for use with the parser"""
-        self.lexer.errors = []
-        self.lexer.lineno = 1
+        """Return the lexer engine for parser integration."""
         return self.lexer
 
 

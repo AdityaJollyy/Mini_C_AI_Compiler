@@ -91,7 +91,7 @@ class AIService:
         # Configure for Gemini via OpenAI-compatible API
         self.api_key = os.getenv("GEMINI_API_KEY", "")
         self.base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
-        self.model = "gemini-2.5-flash"
+        self.model = "gemini-3.1-flash-lite-preview"  # Use the appropriate Gemini model name
         self._client = None
     
     @property
